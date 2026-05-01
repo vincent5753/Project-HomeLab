@@ -1,0 +1,43 @@
+- name: Install Packer on Debian-based systems
+  hosts: all
+  become: true
+  vars:
+    hashicorp_gpg_url: "https://apt.releases.hashicorp.com/gpg"
+    hashicorp_keyring_path: "/usr/share/keyrings/hashicorp-archive-keyring.gpg"
+    # Mapping Ansible architecture to Debian architecture naming
+    debian_arch: "{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' if ansible_architecture == 'aarch64' else ansible_architecture }}"
+
+  tasks:
+    - name: Ensure dependencies are installed
+      ansible.builtin.apt:
+        name:
+          - gnupg
+          - software-properties-common
+          - curl
+        state: present
+        update_cache: true
+
+    - name: Download HashiCorp GPG key
+      ansible.builtin.get_url:
+        url: "{{ hashicorp_gpg_url }}"
+        dest: /tmp/hashicorp.asc
+        mode: '0644'
+
+    - name: Dearmor HashiCorp GPG key
+      ansible.builtin.command:
+        cmd: "gpg --dearmor -o {{ hashicorp_keyring_path }}"
+        creates: "{{ hashicorp_keyring_path }}"
+        stdin: "{{ lookup('file', '/tmp/hashicorp.asc') }}"
+      # Using 'creates' makes this task idempotent
+
+    - name: Add HashiCorp Repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch={{ debian_arch }} signed-by={{ hashicorp_keyring_path }}] https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main"
+        state: present
+        filename: hashicorp
+
+    - name: Install Packer
+      ansible.builtin.apt:
+        name: packer
+        state: present
+        update_cache: true
