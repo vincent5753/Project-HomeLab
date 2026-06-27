@@ -1,0 +1,82 @@
+---
+- name: Install Latest Helm Binary
+  hosts: k8s_node
+  become: true
+  vars:
+    helm_api_url: "https://api.github.com/repos/helm/helm/releases/latest"
+    # Map Ansible architecture names to Helm's naming convention
+    arch_mapping:
+      x86_64: "amd64"
+      aarch64: "arm64"
+      armv7l: "arm"
+
+  tasks:
+    - name: Fetch latest Helm release metadata from GitHub API
+      ansible.builtin.uri:
+        url: "{{ helm_api_url }}"
+        return_content: true
+        status_code: 200
+        body_format: json
+      register: github_api_response
+
+    - name: Set Helm version and architecture facts
+      ansible.builtin.set_fact:
+        helm_version: "{{ github_api_response.json.tag_name }}"
+        helm_arch: "{{ arch_mapping[ansible_architecture] | default('amd64') }}"
+
+    - name: Debug detected version and architecture
+      ansible.builtin.debug:
+        msg: "Installing Helm version {{ helm_version }} for {{ helm_arch }}"
+
+    - name: Download Helm checksum file
+      ansible.builtin.get_url:
+        url: "https://get.helm.sh/helm-{{ helm_version }}-linux-{{ helm_arch }}.tar.gz.sha256sum"
+        dest: "/tmp/helm-{{ helm_version }}.tar.gz.sha256sum"
+        mode: '0644'
+
+    - name: Read checksum value
+      ansible.builtin.command:
+        cmd: "cat /tmp/helm-{{ helm_version }}.tar.gz.sha256sum"
+      register: checksum_file_content
+      changed_when: false
+
+    - name: Extract raw SHA256 string
+      ansible.builtin.set_fact:
+        helm_sha256: "{{ checksum_file_content.stdout.split()[0] }}"
+
+    - name: Download and Verify Helm tarball
+      ansible.builtin.get_url:
+        url: "https://get.helm.sh/helm-{{ helm_version }}-linux-{{ helm_arch }}.tar.gz"
+        dest: "/tmp/helm-{{ helm_version }}.tar.gz"
+        checksum: "sha256:{{ helm_sha256 }}"
+        mode: '0644'
+
+    - name: Ensure temporary extraction directory exists
+      ansible.builtin.file:
+        path: "/tmp/helm-extracted"
+        state: directory
+        mode: '0755'
+
+    - name: Unpack Helm binary
+      ansible.builtin.unarchive:
+        src: "/tmp/helm-{{ helm_version }}.tar.gz"
+        dest: "/tmp/helm-extracted"
+        remote_src: true
+
+    - name: Move Helm binary to /usr/local/bin
+      ansible.builtin.copy:
+        src: "/tmp/helm-extracted/linux-{{ helm_arch }}/helm"
+        dest: "/usr/local/bin/helm"
+        mode: '0755'
+        remote_src: true
+      notify: Clean up installation artifacts
+
+  handlers:
+    - name: Clean up installation artifacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/helm-{{ helm_version }}.tar.gz"
+        - "/tmp/helm-{{ helm_version }}.tar.gz.sha256sum"
+        - "/tmp/helm-extracted"
